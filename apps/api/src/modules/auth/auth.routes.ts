@@ -58,7 +58,11 @@ function getClientIp(request: Request): string {
   // use the forwarded header as the canonical client IP.
   const hasCustomProxy = !!process.env.TRUSTED_PROXY_IPS?.trim();
   if (hasCustomProxy) {
-    if (forwarded) return forwarded.split(",")[0].trim();
+    if (forwarded) {
+      const firstForwardedIp = forwarded.split(",")[0]?.trim();
+      if (firstForwardedIp) return firstForwardedIp;
+    }
+
     if (realIp) return realIp.trim();
   }
 
@@ -165,6 +169,8 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
         // "Secure",
       ].join("; ");
 
+      const normalizedRole = user.roleName.trim().toLowerCase();
+
       return {
         success: true,
         message: "Login successful.",
@@ -172,7 +178,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
           id: user.id,
           username: user.username,
           email: user.email,
-          role: user.roleName,
+          role: normalizedRole,
         },
       };
     },
@@ -194,4 +200,72 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
     ].join("; ");
 
     return { success: true, message: "Logged out." };
-  });
+  })
+
+  // ── POST /auth/register ────────────────────────────────────────────────────
+  .post(
+    "/register",
+    async ({ body, set }) => {
+      const { username, email, password, role: roleName } = body;
+
+      // Check username not taken
+      const existingUser = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.username, username.trim()))
+        .limit(1);
+
+      if (existingUser[0]) {
+        set.status = 409;
+        return { success: false, message: "Username is already taken." };
+      }
+
+      // Check email not taken
+      const existingEmail = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, email.trim().toLowerCase()))
+        .limit(1);
+
+      if (existingEmail[0]) {
+        set.status = 409;
+        return { success: false, message: "Email is already in use." };
+      }
+
+      // Resolve requested role — only allow non-admin roles to be self-assigned
+      const allowedRoles = ["producer", "developer", "designer", "qa"];
+      const targetRoleName = allowedRoles.includes(roleName?.toLowerCase() ?? "")
+        ? roleName!.toLowerCase()
+        : "developer"; // safe default
+
+      const roleRows = await db.select().from(roles);
+      const targetRole = roleRows.find((r) => r.roleName.toLowerCase() === targetRoleName)
+        ?? roleRows.find((r) => r.roleName.toLowerCase() !== "admin")
+        ?? roleRows[0];
+
+      if (!targetRole) {
+        set.status = 500;
+        return { success: false, message: "No roles found. Please seed the roles table first." };
+      }
+
+      const hashed = await Bun.password.hash(password);
+
+      await db.insert(users).values({
+        username: username.trim(),
+        email:    email.trim().toLowerCase(),
+        password: hashed,
+        roleId:   targetRole.roleId,
+      });
+
+      set.status = 201;
+      return { success: true, message: "Account created successfully." };
+    },
+    {
+      body: t.Object({
+        username: t.String({ minLength: 1, maxLength: 100 }),
+        email:    t.String({ minLength: 1 }),
+        password: t.String({ minLength: 8 }),
+        role:     t.Optional(t.String()),
+      }),
+    }
+  );

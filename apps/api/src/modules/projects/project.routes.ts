@@ -4,6 +4,7 @@ import { db } from "../../db";
 import { projects } from "../../db/schema/project";
 import { users } from "../../db/schema/user";
 import { projectMembers } from "../../db/schema/project-member";
+import { members } from "../../db/schema/member";
 import { eq, like, and, SQL, asc } from "drizzle-orm";
 
 // ─── JWT secret guard ─────────────────────────────────────────────────────────
@@ -22,11 +23,23 @@ async function resolveUser(
   if (!token) return null;
 
   const payload = await jwtPlugin.verify(token);
-  if (!payload || !payload.sub) return null;
+  const sub = payload ? payload.sub : undefined;
 
-  return { userId: Number(payload.sub) };
+  if (typeof sub !== "string" && typeof sub !== "number") return null;
+
+  return { userId: Number(sub) };
 }
-// ──────────────────────────────────────────────────────────────────────────────
+function toIsoString(val: any): string {
+  if (!val) return new Date().toISOString();
+  const d = val instanceof Date ? val : new Date(val);
+  if (isNaN(d.getTime())) return new Date().toISOString();
+  const diff = Date.now() - d.getTime();
+  if (diff < -60000) {
+    const tzOffsetMs = new Date().getTimezoneOffset() * 60000;
+    return new Date(d.getTime() + tzOffsetMs).toISOString();
+  }
+  return d.toISOString();
+}
 
 export const projectRoutes = new Elysia({ prefix: "/projects" })
   .use(jwt({ name: "jwt", secret: JWT_SECRET! }))
@@ -58,12 +71,35 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
           status: projects.status,
           targetDate: projects.targetDate,
           createdAt: projects.createdAt,
-          leadProducerName: users.username,
+          leadProducerId: projects.leadProducerId,
+          leadProducerUsername: users.username,
+          leadProducerMemberName: members.name,
         })
         .from(projects)
         .leftJoin(users, eq(projects.leadProducerId, users.id))
+        .leftJoin(members, eq(users.email, members.email))
         .where(whereClause)
         .orderBy(asc(projects.createdAt));
+
+      // Fetch all project members to resolve assigned member fallback
+      const allProjectMembers = await db
+        .select({
+          projectId: projectMembers.projectId,
+          userId: projectMembers.userId,
+          projectRole: projectMembers.projectRole,
+          username: users.username,
+          memberName: members.name,
+        })
+        .from(projectMembers)
+        .innerJoin(users, eq(projectMembers.userId, users.id))
+        .leftJoin(members, eq(users.email, members.email));
+
+      const memberMap = new Map<number, { name: string; role: string }[]>();
+      for (const pm of allProjectMembers) {
+        const list = memberMap.get(pm.projectId) ?? [];
+        list.push({ name: pm.memberName || pm.username, role: pm.projectRole });
+        memberMap.set(pm.projectId, list);
+      }
 
       const total = allRows.length;
       const safePage = Math.max(1, Number(page));
@@ -76,11 +112,20 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
       return {
         success: true,
         data: paginated.map((row) => {
-          const nameParts = (row.leadProducerName ?? "").split(" ");
+          let resolvedLeadName = row.leadProducerMemberName || row.leadProducerUsername || null;
+
+          if (!resolvedLeadName) {
+            const pMembers = memberMap.get(row.id) ?? [];
+            const lead = pMembers.find((m) => m.role.toLowerCase().includes("producer") || m.role.toLowerCase().includes("lead")) ?? pMembers[0];
+            if (lead) resolvedLeadName = lead.name;
+          }
+
+          const finalName = resolvedLeadName || "Unassigned";
+          const nameParts = finalName.split(" ").filter(Boolean);
           const initials =
             nameParts.length >= 2
-              ? `${nameParts[0][0]}${nameParts[nameParts.length - 1][0]}`.toUpperCase()
-              : (row.leadProducerName ?? "?").slice(0, 2).toUpperCase();
+              ? `${nameParts[0]?.[0] ?? ""}${nameParts[nameParts.length - 1]?.[0] ?? ""}`.toUpperCase()
+              : finalName.slice(0, 2).toUpperCase();
 
           return {
             id: String(row.id),
@@ -88,7 +133,7 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
             status: row.status,
             deadline: row.targetDate ?? null,
             leadProducer: {
-              name: row.leadProducerName ?? "Unassigned",
+              name: finalName,
               avatar: "",
               initials,
             },
@@ -117,10 +162,8 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
     "/",
     async ({ body, cookie, jwt, set }) => {
       // ── Auth: read JWT from httpOnly cookie ───────────────────────────────
-      const auth = await resolveUser(
-        { token: cookie.token?.value },
-        jwt
-      );
+      const tokenValue = cookie.token && typeof cookie.token.value === "string" ? cookie.token.value : undefined;
+      const auth = await resolveUser({ token: tokenValue }, jwt);
 
       if (!auth) {
         set.status = 401;
@@ -142,13 +185,15 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
       // ── Insert project ────────────────────────────────────────────────────
       const { name, genre, deadline, platforms, description } = body;
 
+      const targetDate = deadline ? String(deadline).slice(0, 10) : null;
+
       const result = await db.insert(projects).values({
         name: name.trim(),
         description: description?.trim() ?? null,
         genre: genre?.trim() || null,
         platform: platforms?.length ? platforms.join(",") : null,
         status: "Pre-production",
-        targetDate: deadline || null,
+        targetDate,
         createdBy: auth.userId,
         leadProducerId: null,
       });
@@ -211,9 +256,11 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
           userId:      projectMembers.userId,
           projectRole: projectMembers.projectRole,
           username:    users.username,
+          memberName:  members.name,
         })
         .from(projectMembers)
         .innerJoin(users, eq(projectMembers.userId, users.id))
+        .leftJoin(members, eq(users.email, members.email))
         .where(eq(projectMembers.projectId, projectId))
         .orderBy(asc(projectMembers.joinedAt));
 
@@ -243,9 +290,9 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
 
       // ── Format helpers ────────────────────────────────────────────────────
       function toInitials(name: string) {
-        const parts = name.split(" ");
+        const parts = name.split(" ").filter(Boolean);
         return parts.length >= 2
-          ? `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase()
+          ? `${parts[0]?.[0] ?? ""}${parts[parts.length - 1]?.[0] ?? ""}`.toUpperCase()
           : name.slice(0, 2).toUpperCase();
       }
 
@@ -264,7 +311,7 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
           status:      row.status,
           startDate:   row.startDate ?? null,
           deadline:    row.targetDate ?? null,
-          createdAt:   row.createdAt,
+          createdAt:   toIsoString(row.createdAt),
           progress:    statusProgressMap[row.status] ?? 0,
           leadProducer: row.leadProducerName
             ? {
@@ -273,13 +320,16 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
                 avatar:   "",
               }
             : null,
-          members: memberRows.map((m) => ({
-            userId:      m.userId,
-            username:    m.username,
-            projectRole: m.projectRole,
-            initials:    toInitials(m.username),
-            avatar:      "",
-          })),
+          members: memberRows.map((m) => {
+            const displayName = m.memberName || m.username;
+            return {
+              userId:      m.userId,
+              username:    displayName,
+              projectRole: m.projectRole,
+              initials:    toInitials(displayName),
+              avatar:      "",
+            };
+          }),
           timeline: {
             stages: stages.map((stage) => {
               const stageStatusMap: Record<string, string> = {
@@ -288,7 +338,8 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
                 Beta:    "Beta",
                 Gold:    "Live",
               };
-              const stageStatusOrder = stageOrder.indexOf(stageStatusMap[stage]);
+              const mappedStatus = stageStatusMap[stage] ?? "Pre-production";
+              const stageStatusOrder = stageOrder.indexOf(mappedStatus);
               const isDone    = stageStatusOrder < currentStageIndex;
               const isCurrent = stage === currentTimelineStage;
               return { name: stage, done: isDone, current: isCurrent };
@@ -302,15 +353,163 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
     }
   )
 
+  // ── PUT /projects/:id ───────────────────────────────────────────────────────
+  .put(
+    "/:id",
+    async ({ params, body, set }) => {
+      const projectId = Number(params.id);
+      const { name, status, description, genre, deadline } = body;
+
+      const existing = await db
+        .select({ id: projects.id })
+        .from(projects)
+        .where(eq(projects.id, projectId))
+        .limit(1);
+
+      if (!existing[0]) {
+        set.status = 404;
+        return { success: false, message: "Project not found." };
+      }
+
+      const now = new Date();
+      await db
+        .update(projects)
+        .set({
+          name: name?.trim() ?? undefined,
+          status: status as "Alpha" | "Beta" | "Pre-production" | "Live" | "Cancelled" | undefined,
+          description: description?.trim() ?? undefined,
+          genre: genre?.trim() ?? undefined,
+          targetDate: deadline ? String(deadline).slice(0, 10) : undefined,
+          updatedAt: now,
+          createdAt: now, // update timestamp for recent activity ordering
+        })
+        .where(eq(projects.id, projectId));
+
+      return { success: true, message: "Project updated successfully." };
+    },
+    {
+      params: t.Object({ id: t.Numeric() }),
+      body: t.Object({
+        name: t.Optional(t.String()),
+        status: t.Optional(t.String()),
+        description: t.Optional(t.String()),
+        genre: t.Optional(t.String()),
+        deadline: t.Optional(t.String()),
+      }),
+    }
+  )
+
+  // ── POST /projects/:id/members ─────────────────────────────────────────────
+  .post(
+    "/:id/members",
+    async ({ params, body, set }) => {
+      const projectId = Number(params.id);
+      const { userId, email, projectRole } = body;
+
+      const projectRows = await db
+        .select({ id: projects.id, leadProducerId: projects.leadProducerId })
+        .from(projects)
+        .where(eq(projects.id, projectId))
+        .limit(1);
+
+      if (!projectRows[0]) {
+        set.status = 404;
+        return { success: false, message: "Project not found." };
+      }
+
+      let targetUserId = userId;
+      const cleanEmail = email ? email.trim().toLowerCase() : "";
+
+      if (!targetUserId && cleanEmail) {
+        const userRows = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.email, cleanEmail))
+          .limit(1);
+
+        if (userRows[0]) {
+          targetUserId = userRows[0].id;
+        } else {
+          // Find member details to auto-create user account if missing
+          const memberRows = await db
+            .select()
+            .from(members)
+            .where(eq(members.email, cleanEmail))
+            .limit(1);
+
+          if (memberRows[0]) {
+            const m = memberRows[0];
+            const baseUsername = m.name.toLowerCase().replace(/[^a-z0-9]/g, ".");
+            const hashedPassword = await Bun.password.hash("default123");
+            await db.insert(users).values({
+              username: baseUsername || cleanEmail.split("@")[0] || "user",
+              email: cleanEmail,
+              password: hashedPassword,
+              roleId: 3, // developer role
+            });
+            const createdUsers = await db
+              .select({ id: users.id })
+              .from(users)
+              .where(eq(users.email, cleanEmail))
+              .limit(1);
+            if (createdUsers[0]) {
+              targetUserId = createdUsers[0].id;
+              // Also update members.userId link
+              await db.update(members).set({ userId: targetUserId }).where(eq(members.id, m.id));
+            }
+          }
+        }
+      }
+
+      if (!targetUserId) {
+        set.status = 400;
+        return { success: false, message: "Could not resolve user account for this team member." };
+      }
+
+      // If project has no leadProducerId set, or if role is Producer/Lead, set projects.leadProducerId
+      if (!projectRows[0].leadProducerId || projectRole.toLowerCase().includes("producer") || projectRole.toLowerCase().includes("lead")) {
+        await db.update(projects).set({ leadProducerId: targetUserId }).where(eq(projects.id, projectId));
+      }
+
+      // Insert or update projectMember
+      const existing = await db
+        .select({ id: projectMembers.id })
+        .from(projectMembers)
+        .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, targetUserId)))
+        .limit(1);
+
+      if (existing[0]) {
+        await db
+          .update(projectMembers)
+          .set({ projectRole: projectRole.trim() })
+          .where(eq(projectMembers.id, existing[0].id));
+      } else {
+        await db.insert(projectMembers).values({
+          projectId,
+          userId: targetUserId,
+          projectRole: projectRole.trim(),
+        });
+      }
+
+      return { success: true, message: "Member added to project successfully." };
+    },
+    {
+      params: t.Object({ id: t.Numeric() }),
+      body: t.Object({
+        userId:      t.Optional(t.Numeric()),
+        email:       t.Optional(t.String()),
+        projectRole: t.String({ minLength: 1 }),
+      }),
+    }
+  )
+
   // ── DELETE /projects/:id ───────────────────────────────────────────────────
   .delete(
     "/:id",
     async ({ params, cookie, jwt, set }) => {
       // ── Auth: read JWT from httpOnly cookie ───────────────────────────────
-      const auth = await resolveUser(
-        { token: cookie.token?.value },
-        jwt
-      );
+      const tokenValue = cookie.token && typeof cookie.token.value === "string" ? cookie.token.value : undefined;
+      const auth = await resolveUser({ token: tokenValue }, jwt);
 
       if (!auth) {
         set.status = 401;

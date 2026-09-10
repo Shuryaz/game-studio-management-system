@@ -10,12 +10,8 @@ import {
   Library,
   Bug,
   Users,
-  Activity,
   LogOut,
   Plus,
-  Search,
-  Bell,
-  Settings,
   ChevronDown,
   MessageSquare,
   GitBranch,
@@ -32,6 +28,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/src/context/auth-context";
+import { can } from "@/src/lib/permissions";
 import { Separator } from "@/components/ui/separator";
 import {
   Avatar,
@@ -39,15 +37,16 @@ import {
   AvatarFallback,
 } from "@/components/ui/avatar";
 import { CreateProjectModal } from "@/components/create-project-modal";
+import { Topbar } from "@/components/topbar";
 
 const navItems = [
   { label: "Dashboard",          icon: LayoutDashboard, href: "/dashboard" },
   { label: "Project Management", icon: FolderKanban,    href: "/project-management" },
   { label: "Sprint",             icon: Zap,             href: "/sprint" },
   { label: "Tasks",              icon: CheckSquare,     href: "/tasks" },
-  { label: "Asset Library",      icon: Library,         href: "#" },
-  { label: "Bug Tracking",       icon: Bug,             href: "#", badge: 5 },
-  { label: "Team",               icon: Users,           href: "#" },
+  { label: "Asset Library",      icon: Library,         href: "/asset-library" },
+  { label: "Bug Tracking",       icon: Bug,             href: "/bug-tracking" },
+  { label: "Team",               icon: Users,           href: "/team" },
 ];
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -61,7 +60,6 @@ interface TaskCard {
   title:     string;
   desc?:     string;
   priority:  Priority;
-  deadline?: string;
   assignee:  string;
   tag?:      string;
   comments?: number;
@@ -80,6 +78,11 @@ interface Sprint {
   label: string;
   start: string;
   end:   string;
+}
+
+interface AssigneeOption {
+  id: string;
+  username: string;
 }
 
 // ── Toast notice ───────────────────────────────────────────────────────────────
@@ -122,41 +125,14 @@ const nextStateLabel: Partial<Record<ColumnId, string>> = {
   "testing":     "Move to Done",
 };
 
-// ── Initial data ───────────────────────────────────────────────────────────────
-const initialSprints: Sprint[] = [
-  { id: "s12", label: "Sprint 12: Nexus Beta",   start: "2024-10-12", end: "2024-10-24" },
-  { id: "s11", label: "Sprint 11: Alpha Polish",  start: "2024-09-28", end: "2024-10-11" },
-  { id: "s10", label: "Sprint 10: Core Loop",     start: "2024-09-14", end: "2024-09-27" },
-];
+// ── Initial data (cleaned up: columns start empty; persistent data should come from DB)
+const initialSprints: Sprint[] = [];
 
 const initialColumns: Column[] = [
-  {
-    id: "todo", label: "TO DO",
-    tasks: [
-      { id: "KITS-101", type: "Sprint Item",   title: "Implement audio cues for stealth mechanics", priority: "Lo",     assignee: "KS", comments: 2,            columnId: "todo" },
-      { id: "KITS-105", type: "Standard Task", title: "Design main menu UI wireframes",             priority: "Medium", assignee: "KS", tag: "Wireframe",       columnId: "todo" },
-    ],
-  },
-  {
-    id: "in-progress", label: "IN PROGRESS",
-    tasks: [
-      { id: "KITS-181", type: "Sprint Item",   title: "Fix lighting bugs in Sector 7 rendering",        priority: "High",   assignee: "KS", comments: 1, branches: 5, columnId: "in-progress" },
-      { id: "KITS-102", type: "Standard Task", title: "Refactor player inventory state management",      priority: "Medium", assignee: "KS",                          columnId: "in-progress" },
-    ],
-  },
-  {
-    id: "testing", label: "TESTING",
-    tasks: [
-      { id: "KITS-099", type: "Sprint Item",   title: "Optimize polygon count on boss character model", priority: "High", assignee: "KS", tag: "QA Review", columnId: "testing" },
-    ],
-  },
-  {
-    id: "done", label: "DONE",
-    tasks: [
-      { id: "KITS-072", type: "Standard Task", title: "Setup level streaming boundaries hub-world",   priority: "Medium", assignee: "KS", tag: "Feature", columnId: "done" },
-      { id: "KITS-051", type: "Standard Task", title: "Update placeholder textures in tutorial area", priority: "Lo",     assignee: "KS", tag: "Art",     columnId: "done" },
-    ],
-  },
+  { id: "todo", label: "TO DO", tasks: [] },
+  { id: "in-progress", label: "IN PROGRESS", tasks: [] },
+  { id: "testing", label: "TESTING", tasks: [] },
+  { id: "done", label: "DONE", tasks: [] },
 ];
 
 // ── ID counters ────────────────────────────────────────────────────────────────
@@ -227,44 +203,41 @@ interface TaskFormState {
   title:    string;
   desc:     string;
   priority: Priority;
-  deadline: string;
   assignee: string;
+  deadline: string;
   columnId: ColumnId;
 }
 
-function CreateTaskModal({
+function CreateSprintItemModal({
   open,
-  defaultType,   // ← Sprint page passes "Sprint Item", Tasks page will pass "Standard Task"
   initial,
   editId,
+  assignees = [],
   onClose,
   onSubmit,
-  onSendToTasks,
 }: {
-  open:           boolean;
-  defaultType?:   TaskType;
-  initial?:       Partial<TaskFormState>;
-  editId?:        string;
-  onClose:        () => void;
-  onSubmit:       (form: TaskFormState, editId?: string) => void;
-  onSendToTasks?: (form: TaskFormState) => void;
+  open:     boolean;
+  initial?: Partial<TaskFormState>;
+  editId?:  string;
+  assignees?: AssigneeOption[];
+  onClose:  () => void;
+  onSubmit: (form: TaskFormState, editId?: string) => void;
 }) {
   const makeDefault = useCallback((): TaskFormState => ({
-    type:     defaultType ?? "Standard Task",
+    type:     "Sprint Item",
     title:    "",
     desc:     "",
     priority: "Medium",
-    deadline: "",
     assignee: "",
+    deadline: "",
     columnId: "todo",
-  }), [defaultType]);
+  }), []);
 
   const [form, setForm] = useState<TaskFormState>(() => ({ ...makeDefault(), ...initial }));
 
   if (!open) return null;
 
   const isEdit = Boolean(editId);
-  const isSendingToTasks = form.type === "Standard Task" && !isEdit;
 
   function set<K extends keyof TaskFormState>(k: K, v: TaskFormState[K]) {
     setForm((prev) => ({ ...prev, [k]: v }));
@@ -272,13 +245,8 @@ function CreateTaskModal({
 
   function handleSubmit() {
     if (!form.title.trim()) return;
-    if (isSendingToTasks && onSendToTasks) {
-      onClose();
-      onSendToTasks(form);
-    } else {
-      onSubmit(form, editId);
-      onClose();
-    }
+    onSubmit(form, editId);
+    onClose();
   }
 
   return (
@@ -289,10 +257,10 @@ function CreateTaskModal({
         <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-border">
           <div>
             <h2 className="text-[15px] font-black tracking-wide">
-              {isEdit ? "Edit Task" : "Create Task"}
+              {isEdit ? "Edit Sprint Item" : "Create Sprint Item"}
             </h2>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              {isEdit ? "Update the task details below." : "Add a new item to the production queue."}
+              {isEdit ? "Update the item details below." : "Add a new item to the sprint board."}
             </p>
           </div>
           <button
@@ -308,38 +276,10 @@ function CreateTaskModal({
         {/* Body */}
         <div className="px-6 py-5 flex flex-col gap-5 overflow-y-auto max-h-[70vh]">
 
-          {/* Task Type */}
-          <div className="flex flex-col gap-2">
-            <label className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Task Type</label>
-            <div className="flex">
-              {(["Standard Task", "Sprint Item"] as TaskType[]).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => set("type", t)}
-                  className={`flex-1 h-8 text-[12px] font-semibold border transition-colors first:rounded-l-sm last:rounded-r-sm ${
-                    form.type === t
-                      ? "bg-foreground text-background border-foreground"
-                      : "bg-background text-foreground border-border hover:bg-muted"
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-            {/* Hint label when Standard Task is selected */}
-            {isSendingToTasks && (
-              <p className="text-[11px] text-amber-500 font-semibold flex items-center gap-1.5">
-                <ArrowRight className="w-3 h-3 shrink-0" />
-                This task will be added to the Tasks list.
-              </p>
-            )}
-          </div>
-
           {/* Title */}
           <div className="flex flex-col gap-2">
             <label className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
-              Task Title <span className="text-red-500">*</span>
+              Title <span className="text-red-500">*</span>
             </label>
             <Input
               placeholder="e.g., Implement UI wireframes"
@@ -347,6 +287,7 @@ function CreateTaskModal({
               value={form.title}
               onChange={(e) => set("title", e.target.value)}
               autoFocus
+              onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             />
           </div>
 
@@ -355,45 +296,31 @@ function CreateTaskModal({
             <label className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Description</label>
             <textarea
               rows={3}
-              placeholder="Detailed description of the task requirements..."
+              placeholder="Detailed description of the item..."
               className="w-full text-[12px] bg-background border border-border rounded-sm px-3 py-2 outline-none resize-y placeholder:text-muted-foreground/60 focus:border-foreground/40 transition-colors"
               value={form.desc}
               onChange={(e) => set("desc", e.target.value)}
             />
           </div>
 
-          {/* Priority + Deadline */}
-          <div className="flex gap-5">
-            <div className="flex flex-col gap-2 flex-1">
-              <label className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Priority</label>
-              <div className="flex">
-                {(["Lo", "Medium", "High"] as Priority[]).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => set("priority", p)}
-                    className={`flex-1 h-8 text-[12px] font-semibold border transition-colors first:rounded-l-sm last:rounded-r-sm ${
-                      form.priority === p
-                        ? "bg-foreground text-background border-foreground"
-                        : "bg-background text-foreground border-border hover:bg-muted"
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="flex flex-col gap-2 flex-1">
-              <label className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Deadline</label>
-              <div className="relative">
-                <Calendar className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-                <input
-                  type="date"
-                  className="w-full h-9 pl-8 pr-3 text-[12px] bg-background border border-border rounded-sm outline-none focus:border-foreground/40 transition-colors text-foreground"
-                  value={form.deadline}
-                  onChange={(e) => set("deadline", e.target.value)}
-                />
-              </div>
+          {/* Priority */}
+          <div className="flex flex-col gap-2">
+            <label className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Priority</label>
+            <div className="flex">
+              {(["Lo", "Medium", "High"] as Priority[]).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => set("priority", p)}
+                  className={`flex-1 h-8 text-[12px] font-semibold border transition-colors first:rounded-l-sm last:rounded-r-sm ${
+                    form.priority === p
+                      ? "bg-foreground text-background border-foreground"
+                      : "bg-background text-foreground border-border hover:bg-muted"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -402,12 +329,16 @@ function CreateTaskModal({
             <label className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Assignee</label>
             <div className="relative">
               <User className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-              <Input
-                placeholder="Unassigned"
-                className="pl-8 h-9 text-[12px] rounded-sm"
-                value={form.assignee}
-                onChange={(e) => set("assignee", e.target.value)}
-              />
+              <select
+                value={form.assignee || "Unassigned"}
+                onChange={(e) => set("assignee", e.target.value === "Unassigned" ? "" : e.target.value)}
+                className="w-full h-9 pl-8 pr-3 text-[12px] bg-background border border-border rounded-sm outline-none focus:border-foreground/40 transition-colors text-foreground appearance-none"
+              >
+                <option value="Unassigned">Unassigned</option>
+                {assignees.map((member) => (
+                  <option key={member.id} value={member.username}>{member.username}</option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -420,17 +351,11 @@ function CreateTaskModal({
           </Button>
           <Button
             size="sm"
-            className={`text-[12px] font-black px-5 tracking-wide uppercase ${
-              isSendingToTasks ? "bg-amber-500 hover:bg-amber-600 text-white" : ""
-            }`}
+            className="text-[12px] font-black px-5 tracking-wide uppercase"
             onClick={handleSubmit}
             disabled={!form.title.trim()}
           >
-            {isEdit
-              ? "Save Changes"
-              : isSendingToTasks
-              ? "Send to Tasks →"
-              : "Create Task"}
+            {isEdit ? "Save Changes" : "Create Item"}
           </Button>
         </div>
       </div>
@@ -576,6 +501,10 @@ function CardMenu({ columnId, onEdit, onDelete, onAdvance }: {
   onDelete:  () => void;
   onAdvance: () => void;
 }) {
+  const { user } = useAuth();
+  const canManage = can(user?.role, "sprint:manage");
+  const canUpdate = can(user?.role, "sprint:update");
+  const showAdvance = canUpdate && columnId !== "done";
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -587,6 +516,8 @@ function CardMenu({ columnId, onEdit, onDelete, onAdvance }: {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
+
+  if (!showAdvance && !canManage) return null;
 
   return (
     <div ref={ref} className="relative">
@@ -601,7 +532,7 @@ function CardMenu({ columnId, onEdit, onDelete, onAdvance }: {
 
       {open && (
         <div className="absolute right-0 top-full mt-1 z-50 w-44 bg-card border border-border rounded-sm shadow-md py-1">
-          {columnId !== "done" && (
+          {showAdvance && (
             <>
               <button
                 type="button"
@@ -611,26 +542,30 @@ function CardMenu({ columnId, onEdit, onDelete, onAdvance }: {
                 <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" />
                 {nextStateLabel[columnId]}
               </button>
-              <div className="my-1 border-t border-border" />
+              {canManage && <div className="my-1 border-t border-border" />}
             </>
           )}
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onEdit(); setOpen(false); }}
-            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] hover:bg-muted transition-colors"
-          >
-            <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
-            Edit
-          </button>
-          <div className="my-1 border-t border-border" />
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onDelete(); setOpen(false); }}
-            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-red-500 hover:bg-red-50 transition-colors"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Delete
-          </button>
+          {canManage && (
+            <>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onEdit(); setOpen(false); }}
+                className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] hover:bg-muted transition-colors"
+              >
+                <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
+                Edit
+              </button>
+              <div className="my-1 border-t border-border" />
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onDelete(); setOpen(false); }}
+                className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-red-500 hover:bg-red-50 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -667,9 +602,6 @@ function KanbanCard({ task, onEdit, onDelete, onAdvance }: {
               {task.assignee ? task.assignee.slice(0, 2).toUpperCase() : "??"}
             </AvatarFallback>
           </Avatar>
-          {task.deadline && (
-            <span className="text-[10px] text-muted-foreground">{fmtDate(task.deadline)}</span>
-          )}
         </div>
         <div className="flex items-center gap-2">
           {task.comments !== undefined && (
@@ -732,10 +664,11 @@ function KanbanColumn({ column, onEditTask, onDeleteTask, onAdvanceTask }: {
 // ─────────────────────────────────────────────────────────────────────────────
 function SprintSelector({ sprints, activeSprint, onSelect, onNewSprint }: {
   sprints:      Sprint[];
-  activeSprint: Sprint;
+  activeSprint: Sprint | null;
   onSelect:     (sprint: Sprint) => void;
   onNewSprint:  () => void;
 }) {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -755,34 +688,55 @@ function SprintSelector({ sprints, activeSprint, onSelect, onNewSprint }: {
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 h-8 px-3 text-[12px] font-semibold border border-border rounded-sm bg-background hover:bg-muted transition-colors"
       >
-        {activeSprint.label}
+        {activeSprint ? activeSprint.label : "Select Sprint"}
         <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
       </button>
 
       {open && (
         <div className="absolute top-full left-0 mt-1 z-50 bg-card border border-border rounded-sm shadow-md w-64 py-1">
           {sprints.map((sprint) => (
-            <button
-              key={sprint.id}
-              type="button"
-              onClick={() => { onSelect(sprint); setOpen(false); }}
-              className={`w-full text-left px-3 py-2 text-[12px] hover:bg-muted transition-colors flex items-center justify-between ${
-                sprint.id === activeSprint.id ? "font-bold" : ""
-              }`}
-            >
-              <span>{sprint.label}</span>
-              {sprint.id === activeSprint.id && <span className="w-1.5 h-1.5 rounded-full bg-foreground shrink-0" />}
-            </button>
+            <div key={sprint.id} className="w-full flex items-center justify-between px-2 py-1">
+              <button
+                type="button"
+                onClick={() => { onSelect(sprint); setOpen(false); }}
+                className={`flex-1 text-left px-3 py-2 text-[12px] hover:bg-muted transition-colors flex items-center ${
+                  activeSprint && sprint.id === activeSprint.id ? "font-bold" : ""
+                }`}
+              >
+                <span>{sprint.label}</span>
+              </button>
+              <div className="flex items-center gap-2 pr-2">
+                {activeSprint && sprint.id === activeSprint.id && <span className="w-1.5 h-1.5 rounded-full bg-foreground shrink-0" />}
+                {can(user?.role, "sprint:manage") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!confirm(`Delete sprint '${sprint.label}'? This will not delete tasks but will disassociate them.`)) return;
+                      window.dispatchEvent(new CustomEvent('gsms:deleteSprint', { detail: { id: sprint.id } }));
+                      setOpen(false);
+                    }}
+                    className="w-7 h-7 flex items-center justify-center rounded-sm text-red-500 hover:bg-red-50 transition-colors"
+                    aria-label={`Delete sprint ${sprint.label}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
           ))}
-          <div className="my-1 border-t border-border" />
-          <button
-            type="button"
-            onClick={() => { setOpen(false); onNewSprint(); }}
-            className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors group"
-          >
-            <Plus className="w-3.5 h-3.5 opacity-50 group-hover:opacity-100 transition-opacity" />
-            New Sprint
-          </button>
+          {can(user?.role, "sprint:manage") && (
+            <>
+              <div className="my-1 border-t border-border" />
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onNewSprint(); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors group"
+              >
+                <Plus className="w-3.5 h-3.5 opacity-50 group-hover:opacity-100 transition-opacity" />
+                New Sprint
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -798,6 +752,7 @@ function Sidebar({ onLogout, onNav, onNewProject }: {
   onNewProject: () => void;
 }) {
   const pathname = usePathname();
+  const { user } = useAuth();
 
   return (
     <aside className="w-[196px] shrink-0 h-screen bg-card border-r border-border flex flex-col">
@@ -812,14 +767,16 @@ function Sidebar({ onLogout, onNav, onNewProject }: {
         </div>
       </div>
       <Separator />
-      <div className="px-3 py-3">
-        <Button size="sm" className="w-full gap-1.5 text-[11px] tracking-widest uppercase font-bold" onClick={onNewProject}>
-          <Plus className="w-3.5 h-3.5" />
-          New Project
-        </Button>
-      </div>
+      {can(user?.role, "project:create") && (
+        <div className="px-3 py-3">
+          <Button size="sm" className="w-full gap-1.5 text-[11px] tracking-widest uppercase font-bold" onClick={onNewProject}>
+            <Plus className="w-3.5 h-3.5" />
+            New Project
+          </Button>
+        </div>
+      )}
       <nav className="flex-1 px-2 py-1 flex flex-col gap-0.5 overflow-y-auto">
-        {navItems.map(({ label, icon: Icon, badge, href }) => {
+        {navItems.map(({ label, icon: Icon, href }) => {
           const isActive = pathname === href;
 
           return (
@@ -832,21 +789,12 @@ function Sidebar({ onLogout, onNav, onNewProject }: {
             >
               <Icon className="w-4 h-4 shrink-0" />
               <span className="flex-1 text-left">{label}</span>
-              {badge && (
-                <Badge variant="default" className="text-[10px] h-4 w-4 p-0 flex items-center justify-center rounded-full">
-                  {badge}
-                </Badge>
-              )}
             </Button>
           );
         })}
       </nav>
       <Separator />
       <div className="px-2 py-3 flex flex-col gap-0.5">
-        <Button variant="ghost" size="sm" className="w-full justify-start gap-2.5 text-[12px]">
-          <Activity className="w-4 h-4 shrink-0" />
-          System Status
-        </Button>
         <Button variant="ghost" size="sm" className="w-full justify-start gap-2.5 text-[12px]" onClick={onLogout}>
           <LogOut className="w-4 h-4 shrink-0" />
           Log Out
@@ -861,6 +809,7 @@ function Sidebar({ onLogout, onNav, onNewProject }: {
 // ─────────────────────────────────────────────────────────────────────────────
 export default function SprintPage() {
   const router = useRouter();
+  const { user } = useAuth();
 
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newSprintOpen,  setNewSprintOpen]  = useState(false);
@@ -874,7 +823,29 @@ export default function SprintPage() {
 
   const [columns,      setColumns]      = useState<Column[]>(initialColumns);
   const [sprints,      setSprints]      = useState<Sprint[]>(initialSprints);
-  const [activeSprint, setActiveSprint] = useState<Sprint>(initialSprints[0]);
+  const [activeSprint, setActiveSprint] = useState<Sprint | null>(initialSprints[0] ?? null);
+  const [assignees,    setAssignees]    = useState<AssigneeOption[]>([]);
+
+  // ── Fetch team members for assignee dropdown ─────────────────────────────────
+  useEffect(() => {
+    async function fetchAssignees() {
+      try {
+        const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+        const res = await fetch(`${API}/team?pageSize=100`, { credentials: "include" });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (json.data && Array.isArray(json.data)) {
+          setAssignees(
+            json.data.map((m: { id: string; name: string; username?: string }) => ({
+              id: m.id,
+              username: m.name || m.username || "Member",
+            }))
+          );
+        }
+      } catch {}
+    }
+    fetchAssignees();
+  }, []);
 
   // ── Read sessionStorage handoff from Tasks page ────────────────────────────
   useEffect(() => {
@@ -912,19 +883,20 @@ export default function SprintPage() {
   }
 
   function openAddTask() {
+    if (!can(user?.role, "sprint:manage")) return;
     setEditingTaskId(undefined);
     setTaskModalInitial({ columnId: "todo" });
     setTaskModalOpen(true);
   }
 
   function openEditTask(task: TaskCard) {
+    if (!can(user?.role, "sprint:manage")) return;
     setEditingTaskId(task.id);
     setTaskModalInitial({
       type:     task.type,
       title:    task.title,
       desc:     task.desc ?? "",
       priority: task.priority,
-      deadline: task.deadline ?? "",
       assignee: task.assignee,
       columnId: task.columnId,
     });
@@ -942,7 +914,6 @@ export default function SprintPage() {
             title:    form.title,
             desc:     form.desc,
             priority: form.priority,
-            deadline: form.deadline,
             assignee: form.assignee,
           },
         })
@@ -960,33 +931,69 @@ export default function SprintPage() {
         }))
       );
     } else {
-      const newTask: TaskCard = {
-        id:       nextTaskId(),
-        type:     form.type,
-        title:    form.title,
-        desc:     form.desc || undefined,
-        priority: form.priority,
-        deadline: form.deadline || undefined,
-        assignee: form.assignee || "Unassigned",
-        columnId: form.columnId,
-      };
-      setColumns((prev) =>
-        prev.map((col) =>
-          col.id !== newTask.columnId ? col : { ...col, tasks: [...col.tasks, newTask] }
-        )
-      );
+      (async () => {
+        try {
+          // Always a Sprint Item on this page — POST /sprints/:id/items
+          if (activeSprint) {
+            const res = await fetch(
+              `${process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001"}/sprints/${activeSprint.id}/items`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  title: form.title,
+                  description: form.desc || undefined,
+                  priority: form.priority,
+                  status: form.columnId,
+                  assignee: form.assignee || undefined,
+                }),
+                credentials: "include",
+              }
+            );
+            if (!res.ok) throw new Error("API error");
+            const data = await res.json();
+            const displayId = data?.data?.externalId ?? nextTaskId();
+            const newTask: TaskCard = {
+              id:       displayId,
+              type:     "Sprint Item",
+              title:    form.title,
+              desc:     form.desc || undefined,
+              priority: form.priority,
+              assignee: form.assignee || "Unassigned",
+              columnId: form.columnId,
+            };
+            setColumns((prev) =>
+              prev.map((col) => col.id !== newTask.columnId ? col : { ...col, tasks: [...col.tasks, newTask] })
+            );
+          }
+        } catch (err) {
+          // fallback to local-only creation
+          const newTask: TaskCard = {
+            id:       nextTaskId(),
+            type:     form.type,
+            title:    form.title,
+            desc:     form.desc || undefined,
+            priority: form.priority,
+            assignee: form.assignee || "Unassigned",
+            columnId: form.columnId,
+          };
+          setColumns((prev) => prev.map((col) => col.id !== newTask.columnId ? col : { ...col, tasks: [...col.tasks, newTask] }));
+        }
+      })();
     }
-  }, []);
+  }, [activeSprint]);
 
   const handleDeleteConfirm = useCallback(() => {
     if (!deleteTarget) return;
+    if (!can(user?.role, "sprint:manage")) return;
     setColumns((prev) =>
       prev.map((col) => ({ ...col, tasks: col.tasks.filter((t) => t.id !== deleteTarget.id) }))
     );
     setDeleteTarget(null);
-  }, [deleteTarget]);
+  }, [deleteTarget, user?.role]);
 
   const handleAdvanceTask = useCallback((task: TaskCard) => {
+    if (!can(user?.role, "sprint:update")) return;
     const idx = COLUMN_ORDER.indexOf(task.columnId);
     if (idx === -1 || idx === COLUMN_ORDER.length - 1) return;
     const nextId = COLUMN_ORDER[idx + 1];
@@ -1001,16 +1008,139 @@ export default function SprintPage() {
 
     // Show the notice banner below the topbar
     setMoveNotice({ taskId: task.id, taskTitle: task.title, toLabel: columnLabel[nextId] });
-  }, []);
+  }, [user?.role]);
 
   const handleCreateSprint = useCallback((name: string, start: string, end: string) => {
-    const n = sprintCounter;
-    const newSprint: Sprint = { id: nextSprintId(), label: `Sprint ${n}: ${name}`, start, end };
-    setSprints((prev) => [newSprint, ...prev]);
-    setActiveSprint(newSprint);
+    (async () => {
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001"}/sprints`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            label: name, 
+            startDate: start && start.trim() ? start : undefined, 
+            endDate: end && end.trim() ? end : undefined 
+          }),
+          credentials: "include",
+        });
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          throw new Error(errJson.message || `Failed to create sprint (${res.status})`);
+        }
+        const json = await res.json();
+        const created = json.data;
+        const newSprint: Sprint = { 
+          id: String(created.id), 
+          label: created.label ?? name, 
+          start: created.startDate ?? "", 
+          end: created.endDate ?? "" 
+        };
+        setSprints((prev) => [newSprint, ...prev]);
+        setActiveSprint(newSprint);
+      } catch (err) {
+        console.error("Sprint creation error:", err);
+        // fallback to local-only when API unavailable
+        const n = sprintCounter;
+        const newSprint: Sprint = { id: nextSprintId(), label: `Sprint ${n}: ${name}`, start, end };
+        setSprints((prev) => [newSprint, ...prev]);
+        setActiveSprint(newSprint);
+      }
+    })();
   }, []);
 
-  const sprintDates = activeSprint.start && activeSprint.end
+  // Delete sprint handler (listens for custom event from SprintSelector)
+  const handleDeleteSprint = useCallback(async (sprintId: string) => {
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001"}/sprints/${sprintId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Delete failed");
+      setSprints((prev) => prev.filter((s) => s.id !== sprintId));
+      if (activeSprint && activeSprint.id === sprintId) {
+        setActiveSprint((prev) => {
+          const remaining = sprints.filter((s) => s.id !== sprintId);
+          return remaining[0] ?? null;
+        });
+        // clear columns
+        setColumns(initialColumns);
+      }
+    } catch (e) {
+      // fallback: remove locally
+      setSprints((prev) => prev.filter((s) => s.id !== sprintId));
+      if (activeSprint && activeSprint.id === sprintId) {
+        const remaining = sprints.filter((s) => s.id !== sprintId);
+        setActiveSprint(remaining[0] ?? null);
+        setColumns(initialColumns);
+      }
+    }
+  }, [activeSprint, sprints]);
+
+  useEffect(() => {
+    function onDelete(e: any) {
+      const id = e?.detail?.id;
+      if (id) handleDeleteSprint(String(id));
+    }
+    window.addEventListener('gsms:deleteSprint', onDelete as EventListener);
+    return () => window.removeEventListener('gsms:deleteSprint', onDelete as EventListener);
+  }, [handleDeleteSprint]);
+
+  // Fetch sprints from API on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001"}/sprints`, { credentials: "include" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const rows = json.data ?? [];
+        const mapped: Sprint[] = rows.map((r: any) => ({ id: String(r.id), label: r.label, start: r.startDate ?? "", end: r.endDate ?? "" }));
+        if (mapped.length) {
+          setSprints(mapped);
+          setActiveSprint(mapped[0]);
+        }
+      } catch (e) {
+        // ignore — keep local defaults
+      }
+    })();
+  }, []);
+
+  // When activeSprint changes, load its tasks from the API
+  const loadedSprintIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeSprint) return;
+    // Only re-fetch when the sprint *id* actually changes, not on every reference update.
+    // This prevents the effect from overwriting optimistic column state after task creation.
+    if (loadedSprintIdRef.current === activeSprint.id) return;
+    loadedSprintIdRef.current = activeSprint.id;
+    (async () => {
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001"}/sprints/${activeSprint.id}/items`, { credentials: "include" });
+        if (!res.ok) return;
+        const json = await res.json();
+        const rows = json.data ?? [];
+        // Map to TaskCard and distribute into columns by status
+        const tasksByCol: Record<ColumnId, TaskCard[]> = { todo: [], "in-progress": [], testing: [], done: [] };
+        for (const r of rows) {
+          const colId = (r.status as ColumnId) ?? "todo";
+          const card: TaskCard = {
+            id: String(r.externalId ?? r.id),
+            type: "Sprint Item",
+            title: r.title,
+            desc: r.description ?? undefined,
+            priority: (r.priority as Priority) ?? "Medium",
+            assignee: r.assignee ?? "Unassigned",
+            columnId: colId,
+          };
+          tasksByCol[colId].push(card);
+        }
+        setColumns(initialColumns.map((c) => ({ ...c, tasks: tasksByCol[c.id] })));
+      } catch (e) {
+        // ignore, keep local columns
+      }
+    })();
+  }, [activeSprint]);
+
+  const sprintDates = activeSprint && activeSprint.start && activeSprint.end
     ? `${fmtDate(activeSprint.start)} - ${fmtDate(activeSprint.end)}`
     : "TBD";
 
@@ -1020,19 +1150,7 @@ export default function SprintPage() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
-        <header className="h-14 shrink-0 bg-card border-b border-border flex items-center px-6 gap-4">
-          <div className="relative w-64">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-            <Input placeholder="Search tasks, assets..." className="pl-8 h-8 text-[12px] rounded-sm" />
-          </div>
-          <div className="flex-1" />
-          <Button variant="ghost" size="icon" className="w-8 h-8"><Bell className="w-4 h-4" /></Button>
-          <Button variant="ghost" size="icon" className="w-8 h-8"><Settings className="w-4 h-4" /></Button>
-          <Avatar size="default">
-            <AvatarImage src="/logo.jpg" alt="User avatar" />
-            <AvatarFallback className="text-xs font-bold">KS</AvatarFallback>
-          </Avatar>
-        </header>
+        <Topbar searchPlaceholder="Search tasks, assets..." />
 
         {/* Move notice — sits right below the topbar, above the body */}
         <MoveNoticeBanner notice={moveNotice} onDismiss={() => setMoveNotice(null)} />
@@ -1042,10 +1160,12 @@ export default function SprintPage() {
           {/* Page header */}
           <div className="flex items-center justify-between mb-6">
             <h1 className="text-2xl font-black">Sprint Board</h1>
-            <Button size="sm" className="gap-1.5 text-[11px] tracking-widest uppercase font-bold" onClick={openAddTask}>
-              <Plus className="w-3.5 h-3.5" />
-              Add Task
-            </Button>
+            {can(user?.role, "sprint:manage") && (
+              <Button size="sm" className="gap-1.5 text-[11px] tracking-widest uppercase font-bold" onClick={openAddTask}>
+                <Plus className="w-3.5 h-3.5" />
+                Add Task
+              </Button>
+            )}
           </div>
 
           {/* Sprint selector */}
@@ -1086,15 +1206,14 @@ export default function SprintPage() {
         onSubmit={handleCreateSprint}
       />
 
-      <CreateTaskModal
+      <CreateSprintItemModal
         key={`${taskModalOpen ? "task-open" : "task-closed"}-${editingTaskId ?? "new"}-${taskModalInitial.columnId ?? "todo"}`}
         open={taskModalOpen}
-        defaultType="Sprint Item"
         initial={taskModalInitial}
         editId={editingTaskId}
+        assignees={assignees}
         onClose={() => setTaskModalOpen(false)}
         onSubmit={handleTaskSubmit}
-        onSendToTasks={handleSendToTasks}
       />
 
       {deleteTarget && (

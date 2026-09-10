@@ -32,8 +32,8 @@ export const projects = mysqlTable("projects", {
   leadProducerId: bigint("lead_producer_id", { mode: "number", unsigned: true })
                     .references(() => users.id),
 
-  startDate:      date("start_date"),
-  targetDate:     date("target_date"),
+  startDate:      date("start_date", { mode: "string" }),
+  targetDate:     date("target_date", { mode: "string" }),
 
   createdBy:      bigint("created_by", { mode: "number", unsigned: true })
                     .notNull()

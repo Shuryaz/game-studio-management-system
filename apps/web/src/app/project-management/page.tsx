@@ -10,12 +10,8 @@ import {
   Library,
   Bug,
   Users,
-  Activity,
   LogOut,
   Plus,
-  Search,
-  Bell,
-  Settings,
   Filter,
   ChevronDown,
   ChevronLeft,
@@ -39,6 +35,9 @@ import {
 } from "@/components/ui/avatar";
 import { CreateProjectModal } from "@/components/create-project-modal";
 import { ProjectDetailModal } from "@/components/project-detail-modal";
+import { Topbar } from "@/components/topbar";
+import { useAuth } from "@/src/context/auth-context";
+import { can } from "@/src/lib/permissions";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type ProjectStatus = "Alpha" | "Beta" | "Pre-production" | "Live" | "Cancelled";
@@ -61,15 +60,36 @@ interface Pagination {
 const STATUSES: Array<"All" | ProjectStatus> = ["All", "Alpha", "Beta", "Pre-production", "Live", "Cancelled"];
 const PAGE_SIZE = 4;
 
+function formatProjectDeadline(value: string | null | undefined) {
+  if (value == null) return "—";
+
+  const raw = String(value).trim();
+  if (!raw || raw === "null" || raw === "undefined") return "—";
+
+  const zeroLikeDate = /^(?:0000|0001)-01-01(?:T.*)?$|^0{4}[-/]|^00\.00|^00:00|^0000-00-00/i;
+  if (zeroLikeDate.test(raw)) return "—";
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "—";
+
+  return parsed.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 const navItems = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/dashboard" },
   { label: "Project Management", icon: FolderKanban, href: "/project-management" },
   { label: "Sprint", icon: Zap, href: "/sprint" },
   { label: "Tasks", icon: CheckSquare, href: "/tasks" },
-  { label: "Asset Library", icon: Library, href: "#" },
-  { label: "Bug Tracking", icon: Bug, href: "#", badge: 5 },
-  { label: "Team", icon: Users, href: "#" },
+  { label: "Asset Library", icon: Library, href: "/asset-library" },
+  { label: "Bug Tracking", icon: Bug, href: "/bug-tracking" },
+  { label: "Team", icon: Users, href: "/team" },
 ];
+
+const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
 
 // ── Status badge style map ─────────────────────────────────────────────────────
 const statusVariant: Record<ProjectStatus, string> = {
@@ -91,6 +111,7 @@ function Sidebar({
   onNewProject: () => void;
 }) {
   const pathname = usePathname();
+  const { user } = useAuth();
 
   return (
     <aside className="w-[196px] shrink-0 h-screen bg-card border-r border-border flex flex-col">
@@ -108,21 +129,23 @@ function Sidebar({
 
       <Separator />
 
-      {/* New Project Button */}
-      <div className="px-3 py-3">
-        <Button
-          size="sm"
-          className="w-full gap-1.5 text-[11px] tracking-widest uppercase font-bold"
-          onClick={onNewProject}
-        >
-          <Plus className="w-3.5 h-3.5" />
-          New Project
-        </Button>
-      </div>
+      {/* New Project Button — admin/producer only */}
+      {can(user?.role, "project:create") && (
+        <div className="px-3 py-3">
+          <Button
+            size="sm"
+            className="w-full gap-1.5 text-[11px] tracking-widest uppercase font-bold"
+            onClick={onNewProject}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            New Project
+          </Button>
+        </div>
+      )}
 
       {/* Nav */}
       <nav className="flex-1 px-2 py-1 flex flex-col gap-0.5 overflow-y-auto">
-        {navItems.map(({ label, icon: Icon, badge, href }) => {
+        {navItems.map(({ label, icon: Icon, href }) => {
           const isActive = pathname === href;
 
           return (
@@ -135,14 +158,6 @@ function Sidebar({
             >
               <Icon className="w-4 h-4 shrink-0" />
               <span className="flex-1 text-left">{label}</span>
-              {badge && (
-                <Badge
-                  variant="default"
-                  className="text-[10px] h-4 w-4 p-0 flex items-center justify-center rounded-full"
-                >
-                  {badge}
-                </Badge>
-              )}
             </Button>
           );
         })}
@@ -152,10 +167,6 @@ function Sidebar({
 
       {/* Bottom */}
       <div className="px-2 py-3 flex flex-col gap-0.5">
-        <Button variant="ghost" size="sm" className="w-full justify-start gap-2.5 text-[12px]">
-          <Activity className="w-4 h-4 shrink-0" />
-          System Status
-        </Button>
         <Button
           variant="ghost"
           size="sm"
@@ -227,6 +238,8 @@ function ActionMenu({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const { user } = useAuth();
+  const canManage = can(user?.role, "project:manage");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -261,23 +274,27 @@ function ActionMenu({
             <Eye className="w-3.5 h-3.5 text-muted-foreground" />
             Details
           </button>
-          <button
-            type="button"
-            onClick={() => { onEdit(); setOpen(false); }}
-            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] hover:bg-muted transition-colors"
-          >
-            <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
-            Edit
-          </button>
-          <div className="my-1 border-t border-border" />
-          <button
-            type="button"
-            onClick={() => { onDelete(); setOpen(false); }}
-            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-red-500 hover:bg-red-50 transition-colors"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Delete
-          </button>
+          {canManage && (
+            <>
+              <button
+                type="button"
+                onClick={() => { onEdit(); setOpen(false); }}
+                className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] hover:bg-muted transition-colors"
+              >
+                <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
+                Edit
+              </button>
+              <div className="my-1 border-t border-border" />
+              <button
+                type="button"
+                onClick={() => { onDelete(); setOpen(false); }}
+                className="w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-red-500 hover:bg-red-50 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -404,6 +421,7 @@ function DeleteConfirmDialog({
 // ── Main Page ──────────────────────────────────────────────────────────────────
 export default function ProjectManagementPage() {
   const router = useRouter();
+  const { user } = useAuth();
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"All" | ProjectStatus>("All");
@@ -437,7 +455,7 @@ export default function ProjectManagementPage() {
       params.set("page", String(page));
       params.set("pageSize", String(PAGE_SIZE));
 
-      const res = await fetch(`http://localhost:3001/projects?${params.toString()}`);
+      const res = await fetch(`${API}/projects?${params.toString()}`);
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
 
       const json = await res.json();
@@ -465,9 +483,31 @@ export default function ProjectManagementPage() {
     setPage(1);
   }
 
+  async function handleStatusChange(projectId: string, newStatus: ProjectStatus) {
+    setProjects((prev) =>
+      prev.map((p) => (p.id === projectId ? { ...p, status: newStatus } : p))
+    );
+
+    try {
+      const res = await fetch(`${API}/projects/${projectId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to update status");
+      }
+      fetchProjects();
+    } catch {
+      fetchProjects();
+    }
+  }
+
   async function handleLogout() {
     // Call the logout endpoint so the server clears the httpOnly cookie
-    await fetch("http://localhost:3001/auth/logout", {
+    await fetch(`${API}/auth/logout`, {
       method: "POST",
       credentials: "include",
     }).catch(() => {});
@@ -480,10 +520,11 @@ export default function ProjectManagementPage() {
 
   async function handleDeleteConfirm() {
     if (!deleteTarget) return;
+    if (!can(user?.role, "project:manage")) return;
 
     setDeleteLoading(true);
     try {
-      const res = await fetch(`http://localhost:3001/projects/${deleteTarget.id}`, {
+      const res = await fetch(`${API}/projects/${deleteTarget.id}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -510,28 +551,7 @@ export default function ProjectManagementPage() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Topbar */}
-        <header className="h-14 shrink-0 bg-card border-b border-border flex items-center px-6 gap-4">
-          <div className="relative w-64">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
-            <Input
-              placeholder="Search project..."
-              className="pl-8 h-8 text-[12px] rounded-sm"
-            />
-          </div>
-
-          <div className="flex-1" />
-
-          <Button variant="ghost" size="icon" className="w-8 h-8">
-            <Bell className="w-4 h-4" />
-          </Button>
-          <Button variant="ghost" size="icon" className="w-8 h-8">
-            <Settings className="w-4 h-4" />
-          </Button>
-          <Avatar size="default">
-            <AvatarImage src="/logo.jpg" alt="User avatar" />
-            <AvatarFallback className="text-xs font-bold">KS</AvatarFallback>
-          </Avatar>
-        </header>
+        <Topbar searchPlaceholder="Search project..." />
 
         {/* Body */}
         <main className="flex-1 overflow-y-auto px-8 py-6">
@@ -548,6 +568,7 @@ export default function ProjectManagementPage() {
               variant="ghost"
               className="gap-1.5 text-[11px] tracking-widest uppercase font-bold mt-1"
               onClick={() => setModalOpen(true)}
+              style={{ display: can(user?.role, "project:create") ? undefined : "none" }}
             >
               <Plus className="w-3.5 h-3.5" />
               Create New Project
@@ -634,14 +655,28 @@ export default function ProjectManagementPage() {
                   </div>
 
                   {/* Status */}
-                  <div>
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-sm border text-[11px] font-semibold ${
-                        statusVariant[project.status] ?? "bg-zinc-100 text-zinc-600 border-zinc-200"
-                      }`}
-                    >
-                      {project.status}
-                    </span>
+                  <div onClick={(e) => e.stopPropagation()}>
+                    {can(user?.role, "project:manage") ? (
+                      <select
+                        value={project.status}
+                        onChange={(e) => handleStatusChange(project.id, e.target.value as ProjectStatus)}
+                        className={`text-[11px] font-bold px-2 py-1 rounded-sm border appearance-none outline-none cursor-pointer transition-colors ${statusVariant[project.status]}`}
+                      >
+                        {STATUSES.filter((s) => s !== "All").map((s) => (
+                          <option key={s} value={s} className="bg-background text-foreground font-semibold">
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-sm border text-[11px] font-semibold ${
+                          statusVariant[project.status] ?? "bg-zinc-100 text-zinc-600 border-zinc-200"
+                        }`}
+                      >
+                        {project.status}
+                      </span>
+                    )}
                   </div>
 
                   {/* Lead Producer */}
@@ -662,7 +697,7 @@ export default function ProjectManagementPage() {
 
                   {/* Deadline */}
                   <span className="text-[12px] text-muted-foreground">
-                    {project.deadline ?? "—"}
+                    {formatProjectDeadline(project.deadline)}
                   </span>
 
                   {/* Actions */}
@@ -737,7 +772,10 @@ export default function ProjectManagementPage() {
 
       <ProjectDetailModal
         projectId={detailProjectId}
-        onClose={() => setDetailProjectId(null)}
+        onClose={() => {
+          setDetailProjectId(null);
+          fetchProjects();
+        }}
       />
 
       <DeleteConfirmDialog

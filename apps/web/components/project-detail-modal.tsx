@@ -15,7 +15,10 @@ import {
   UserPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { useAuth } from "@/src/context/auth-context";
+import { can } from "@/src/lib/permissions";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface TimelineStage {
@@ -62,11 +65,95 @@ const platformAbbr: Record<string, string> = {
   Mobile:      "MOB",
 };
 
+function formatProjectDeadline(value: string | null | undefined) {
+  if (value == null) return "—";
+
+  const raw = String(value).trim();
+  if (!raw || raw === "null" || raw === "undefined") return "—";
+
+  const zeroLikeDate = /^(?:0000|0001)-01-01(?:T.*)?$|^0{4}[-/]|^00\.00|^00:00|^0000-00-00/i;
+  if (zeroLikeDate.test(raw)) return "—";
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "—";
+
+  return parsed.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 // ── Modal ──────────────────────────────────────────────────────────────────────
 export function ProjectDetailModal({ projectId, onClose }: ProjectDetailModalProps) {
+  const { user } = useAuth();
+  const canManage = can(user?.role, "project:manage");
   const [detail, setDetail]   = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
+
+  // Add Member state
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [teamMembers, setTeamMembers]     = useState<{ id: string; userId?: number; name: string; email: string; department: string; jobTitle?: string }[]>([]);
+  const [selectedEmail, setSelectedEmail] = useState("");
+  const [selectedRole, setSelectedRole]   = useState("Developer");
+  const [addingMember, setAddingMember]   = useState(false);
+  const [addMemberErr, setAddMemberErr]   = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!addMemberOpen) return;
+    setAddMemberErr(null);
+    const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+    fetch(`${API}/team?pageSize=100`, { credentials: "include" })
+      .then((r) => r.json())
+      .then((json) => {
+        const list = json.data ?? [];
+        setTeamMembers(list);
+        if (list[0]) setSelectedEmail(list[0].email);
+      })
+      .catch(() => {});
+  }, [addMemberOpen]);
+
+  async function handleAddProjectMember() {
+    if (!selectedEmail || !projectId) return;
+    setAddingMember(true);
+    setAddMemberErr(null);
+
+    const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+    const chosenMember = teamMembers.find((m) => m.email === selectedEmail);
+    const userIdNum = chosenMember?.userId ? Number(chosenMember.userId) : undefined;
+
+    try {
+      const res = await fetch(`${API}/projects/${projectId}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          email: selectedEmail,
+          userId: userIdNum,
+          projectRole: selectedRole,
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        setAddMemberErr(json.message ?? "Failed to add member to project.");
+        return;
+      }
+
+      setAddMemberOpen(false);
+      // Re-fetch project detail
+      const updatedRes = await fetch(`${API}/projects/${projectId}`, { credentials: "include" });
+      if (updatedRes.ok) {
+        const updatedJson = await updatedRes.json();
+        if (updatedJson.success) setDetail(updatedJson.data);
+      }
+    } catch {
+      setAddMemberErr("Could not add member. Please try again.");
+    } finally {
+      setAddingMember(false);
+    }
+  }
 
   useEffect(() => {
     if (!projectId) {
@@ -79,7 +166,8 @@ export function ProjectDetailModal({ projectId, onClose }: ProjectDetailModalPro
     setLoading(true);
     setError(null);
 
-    fetch(`http://localhost:3001/projects/${projectId}`, { credentials: "include" })
+    const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+    fetch(`${API}/projects/${projectId}`, { credentials: "include" })
       .then((res) => {
         if (!res.ok) throw new Error(`Server error: ${res.status}`);
         return res.json();
@@ -162,21 +250,25 @@ export function ProjectDetailModal({ projectId, onClose }: ProjectDetailModalPro
               <div className="flex items-center justify-between px-6 pt-6 pb-5">
                 <h2 className="text-[26px] font-black tracking-tight">{detail.name}</h2>
                 <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5 text-[12px] font-semibold rounded-sm"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                    Edit
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="gap-1.5 text-[12px] font-semibold rounded-sm bg-foreground text-background hover:bg-foreground/85"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Status
-                  </Button>
+                  {canManage && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5 text-[12px] font-semibold rounded-sm"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="gap-1.5 text-[12px] font-semibold rounded-sm bg-foreground text-background hover:bg-foreground/85"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Status
+                      </Button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -225,7 +317,7 @@ export function ProjectDetailModal({ projectId, onClose }: ProjectDetailModalPro
                           Deadline
                         </div>
                         <span className="text-[20px] font-black">
-                          {detail.deadline ?? "—"}
+                          {formatProjectDeadline(detail.deadline)}
                         </span>
                       </div>
 
@@ -346,13 +438,16 @@ export function ProjectDetailModal({ projectId, onClose }: ProjectDetailModalPro
                         <UnassignedRow role="Game Design" />
                       )}
 
-                      <button
-                        type="button"
-                        className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors font-medium"
-                      >
-                        <UserPlus className="w-3.5 h-3.5" />
-                        Add member
-                      </button>
+                      {canManage && (
+                        <button
+                          type="button"
+                          onClick={() => setAddMemberOpen(true)}
+                          className="flex items-center gap-2 mt-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors font-semibold"
+                        >
+                          <UserPlus className="w-3.5 h-3.5" />
+                          Add member
+                        </button>
+                      )}
                     </div>
                   </section>
                 </div>
@@ -361,6 +456,91 @@ export function ProjectDetailModal({ projectId, onClose }: ProjectDetailModalPro
           </>
         )}
       </div>
+
+      {/* Add Project Member Sub-Modal */}
+      {addMemberOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={(e) => e.stopPropagation()}>
+          <div className="w-[420px] bg-card border border-border rounded-sm shadow-2xl flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-border">
+              <h3 className="text-[14px] font-black tracking-wide">Add Member to Project</h3>
+              <button type="button" onClick={() => setAddMemberOpen(false)} className="w-5 h-5 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-bold tracking-[0.14em] text-muted-foreground uppercase">Team Member</label>
+                {teamMembers.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">Loading members…</p>
+                ) : (
+                  <select
+                    value={selectedEmail}
+                    onChange={(e) => setSelectedEmail(e.target.value)}
+                    className="w-full h-9 px-3 text-[12px] bg-background border border-border rounded-sm outline-none focus:border-foreground/40 text-foreground"
+                  >
+                    {teamMembers.map((m) => (
+                      <option key={m.id} value={m.email}>
+                        {m.name} ({m.email}) — {m.department}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-[10px] font-bold tracking-[0.14em] text-muted-foreground uppercase">Project Role</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    "Lead Producer",
+                    "Producer",
+                    "Lead Developer",
+                    "Developer",
+                    "Game Designer",
+                    "UI/UX Designer",
+                    "Artist",
+                    "QA Lead",
+                  ].map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setSelectedRole(r)}
+                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-sm border transition-colors ${
+                        selectedRole === r
+                          ? "bg-foreground text-background border-foreground font-bold"
+                          : "bg-background text-muted-foreground border-border hover:bg-muted hover:text-foreground"
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+                <Input
+                  placeholder="Or enter custom role..."
+                  className="h-8 text-[12px] rounded-sm mt-1"
+                  value={selectedRole}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSelectedRole(e.target.value)}
+                />
+              </div>
+
+              {addMemberErr && (
+                <p className="text-[11px] text-red-500 font-semibold bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-sm px-3 py-2">
+                  {addMemberErr}
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-border">
+              <Button variant="ghost" size="sm" className="text-[11px] font-bold uppercase" onClick={() => setAddMemberOpen(false)} disabled={addingMember}>
+                Cancel
+              </Button>
+              <Button size="sm" className="text-[11px] font-black uppercase px-4" onClick={handleAddProjectMember} disabled={addingMember || !selectedEmail}>
+                {addingMember ? "Adding…" : "Add Member"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

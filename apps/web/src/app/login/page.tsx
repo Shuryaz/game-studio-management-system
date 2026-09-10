@@ -3,10 +3,12 @@
 import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { ImageIcon, User, KeyRound, Eye, EyeOff, MousePointer2, ShieldAlert, CheckCircle2, XCircle } from "lucide-react";
+import { User, KeyRound, Eye, EyeOff, MousePointer2, ShieldAlert, CheckCircle2, XCircle } from "lucide-react";
+import { normalizeRole, useAuth } from "@/src/context/auth-context";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { clearUser, setUser } = useAuth();
 
   const [showPassword, setShowPassword] = useState(false);
   const [username, setUsername] = useState("");
@@ -78,7 +80,12 @@ export default function LoginPage() {
       }
 
       if (res.ok && data.success) {
-        // Token is now set as an httpOnly cookie by the server — no localStorage needed
+        // Always clear stale client-side role before hydrating the next session.
+        clearUser();
+
+        const role = normalizeRole(data.user?.role ?? data.user?.roleName ?? null);
+        setUser(role ? { ...data.user, role } : null);
+
         setStatus({ type: "success", message: `Welcome back, ${data.user.username}! Redirecting…` });
         setTimeout(() => router.push("/dashboard"), 800);
       } else {
@@ -94,19 +101,14 @@ export default function LoginPage() {
   return (
     <div className="flex h-screen w-full overflow-hidden">
       {/* Left Panel */}
-      <div className="hidden lg:flex flex-[3] items-center justify-center bg-[#e8eaed] relative">
-        <span className="absolute top-6 left-6 w-5 h-5 border-t-2 border-l-2 border-blue-400" />
-        <div className="flex flex-col items-center justify-center gap-3 w-[288px] h-[180px] border-2 border-dashed border-blue-400 rounded-sm bg-transparent">
-          <ImageIcon className="w-10 h-10 text-zinc-400 stroke-1" />
-          <div className="text-center">
-            <p className="text-xs font-semibold tracking-widest text-zinc-500 uppercase">
-              True Illustration Place
-            </p>
-            <p className="text-[11px] tracking-wider text-zinc-400 mt-0.5">
-              [ 768 × 800 PX ]
-            </p>
-          </div>
-        </div>
+      <div className="hidden lg:flex flex-[3] relative bg-[#e8eaed] overflow-hidden">
+        <Image
+          src="/login-illustration.png"
+          alt="Small steps build great games"
+          fill
+          priority
+          className="object-cover"
+        />
       </div>
 
       {/* Vertical divider */}
@@ -147,7 +149,7 @@ export default function LoginPage() {
                 htmlFor="employee-id"
                 className="text-[10px] font-semibold tracking-[0.15em] text-zinc-500 uppercase"
               >
-                Employee ID / Email
+                Employee Username / Email
               </label>
               <div className={`flex items-center gap-2 border rounded-sm px-3 py-2.5 bg-white transition-colors ${isLocked ? "border-red-200 bg-red-50" : "border-zinc-200 focus-within:border-zinc-400"}`}>
                 <User className={`w-4 h-4 shrink-0 ${isLocked ? "text-red-300" : "text-zinc-400"}`} />
