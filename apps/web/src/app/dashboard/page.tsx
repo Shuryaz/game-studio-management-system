@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Sidebar } from "@/components/sidebar";
 import { useRouter, usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -57,7 +58,7 @@ const navItems = [
   { label: "Team",               icon: Users,           href: "/team" },
 ];
 
-function Sidebar({ onLogout, onNav, onNewProject }: { onLogout: () => void; onNav: (href: string) => void; onNewProject: () => void }) {
+function LocalSidebar_Unused({ onLogout, onNav, onNewProject }: { onLogout: () => void; onNav: (href: string) => void; onNewProject: () => void }) {
   const pathname = usePathname();
   const { user } = useAuth();
 

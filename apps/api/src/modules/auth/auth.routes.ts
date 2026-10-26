@@ -162,7 +162,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
       set.headers["Set-Cookie"] = [
         `token=${token}`,
         "HttpOnly",
-        "SameSite=Strict",
+        "SameSite=Lax",
         "Path=/",
         `Max-Age=${JWT_EXPIRY_SECONDS}`,
         // Add "Secure" below when serving over HTTPS in production:
@@ -194,7 +194,7 @@ export const authRoutes = new Elysia({ prefix: "/auth" })
     set.headers["Set-Cookie"] = [
       "token=",
       "HttpOnly",
-      "SameSite=Strict",
+      "SameSite=Lax",
       "Path=/",
       "Max-Age=0",
     ].join("; ");

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { Sidebar } from "@/components/sidebar";
 import { useRouter, usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -215,13 +216,13 @@ function UploadAssetModal({
               Drag and drop files here or click to browse
             </p>
             <p className="text-[11px] text-muted-foreground">
-              Supported formats: FBX, OBJ, PNG, JPG, WAV, MP3, MP4, SVG
+              Supported formats: FBX, OBJ, PNG, JPG, WAV, MP3, MP4, SVG, ZIP, 7Z, RAR
             </p>
             <input
               ref={fileInputRef}
               type="file"
               className="hidden"
-              accept=".fbx,.obj,.png,.jpg,.jpeg,.psd,.wav,.mp3,.mp4,.svg,.webp"
+              accept=".fbx,.obj,.png,.jpg,.jpeg,.psd,.wav,.mp3,.mp4,.svg,.webp,.zip,.7z,.rar"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) pickFile(f); }}
             />
           </div>
@@ -593,7 +594,7 @@ function AssetCard({
 }
 
 // ── Sidebar ────────────────────────────────────────────────────────────────────
-function Sidebar({ onLogout, onNav, onNewProject }: { onLogout: () => void; onNav: (href: string) => void; onNewProject: () => void }) {
+function LocalSidebar_Unused({ onLogout, onNav, onNewProject }: { onLogout: () => void; onNav: (href: string) => void; onNewProject: () => void }) {
   const pathname = usePathname();
   const { user } = useAuth();
   return (

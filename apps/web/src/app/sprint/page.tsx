@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
+import { Sidebar } from "@/components/sidebar";
 import { useRouter, usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -56,6 +57,7 @@ type ColumnId = "todo" | "in-progress" | "testing" | "done";
 
 interface TaskCard {
   id:        string;
+  dbId?:     string;
   type:      TaskType;
   title:     string;
   desc?:     string;
@@ -746,7 +748,7 @@ function SprintSelector({ sprints, activeSprint, onSelect, onNewSprint }: {
 // ─────────────────────────────────────────────────────────────────────────────
 // ── SIDEBAR ───────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
-function Sidebar({ onLogout, onNav, onNewProject }: {
+function LocalSidebar_Unused({ onLogout, onNav, onNewProject }: {
   onLogout:     () => void;
   onNav:        (href: string) => void;
   onNewProject: () => void;
@@ -875,7 +877,8 @@ export default function SprintPage() {
   }, []);
 
   async function handleLogout() {
-    await fetch("http://localhost:3001/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
+    const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+    await fetch(`${API}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
     router.push("/login");
   }
   function handleNav(href: string) {
@@ -924,19 +927,41 @@ export default function SprintPage() {
 
   const handleTaskSubmit = useCallback((form: TaskFormState, editId?: string) => {
     if (editId) {
+      let targetDbId = editId;
+      columns.forEach((col) => {
+        const found = col.tasks.find((t) => t.id === editId || t.dbId === editId);
+        if (found && found.dbId) targetDbId = found.dbId;
+      });
+
       setColumns((prev) =>
         prev.map((col) => ({
           ...col,
-          tasks: col.tasks.map((t) => t.id !== editId ? t : { ...t, ...form }),
+          tasks: col.tasks.map((t) => (t.id !== editId && t.dbId !== editId) ? t : { ...t, ...form }),
         }))
       );
+
+      if (activeSprint) {
+        const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+        fetch(`${API}/sprints/${activeSprint.id}/items/${targetDbId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: form.title,
+            description: form.desc || undefined,
+            priority: form.priority,
+            status: form.columnId,
+            assignee: form.assignee || undefined,
+          }),
+          credentials: "include",
+        }).catch(() => {});
+      }
     } else {
       (async () => {
         try {
-          // Always a Sprint Item on this page — POST /sprints/:id/items
           if (activeSprint) {
+            const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
             const res = await fetch(
-              `${process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001"}/sprints/${activeSprint.id}/items`,
+              `${API}/sprints/${activeSprint.id}/items`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -952,9 +977,11 @@ export default function SprintPage() {
             );
             if (!res.ok) throw new Error("API error");
             const data = await res.json();
-            const displayId = data?.data?.externalId ?? nextTaskId();
+            const created = data?.data;
+            const displayId = created?.externalId ?? nextTaskId();
             const newTask: TaskCard = {
               id:       displayId,
+              dbId:     created?.id ? String(created.id) : undefined,
               type:     "Sprint Item",
               title:    form.title,
               desc:     form.desc || undefined,
@@ -967,7 +994,6 @@ export default function SprintPage() {
             );
           }
         } catch (err) {
-          // fallback to local-only creation
           const newTask: TaskCard = {
             id:       nextTaskId(),
             type:     form.type,
@@ -981,16 +1007,28 @@ export default function SprintPage() {
         }
       })();
     }
-  }, [activeSprint]);
+  }, [activeSprint, columns]);
 
   const handleDeleteConfirm = useCallback(() => {
     if (!deleteTarget) return;
     if (!can(user?.role, "sprint:manage")) return;
+    const targetId = deleteTarget.id;
+    const targetDbId = deleteTarget.dbId ?? targetId;
+
     setColumns((prev) =>
-      prev.map((col) => ({ ...col, tasks: col.tasks.filter((t) => t.id !== deleteTarget.id) }))
+      prev.map((col) => ({ ...col, tasks: col.tasks.filter((t) => t.id !== targetId) }))
     );
+
+    if (activeSprint) {
+      const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+      fetch(`${API}/sprints/${activeSprint.id}/items/${targetDbId}`, {
+        method: "DELETE",
+        credentials: "include",
+      }).catch(() => {});
+    }
+
     setDeleteTarget(null);
-  }, [deleteTarget, user?.role]);
+  }, [deleteTarget, user?.role, activeSprint]);
 
   const handleAdvanceTask = useCallback((task: TaskCard) => {
     if (!can(user?.role, "sprint:update")) return;
@@ -1006,9 +1044,19 @@ export default function SprintPage() {
       })
     );
 
+    if (activeSprint) {
+      const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+      fetch(`${API}/sprints/${activeSprint.id}/items/${task.dbId ?? task.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: nextId }),
+        credentials: "include",
+      }).catch(() => {});
+    }
+
     // Show the notice banner below the topbar
     setMoveNotice({ taskId: task.id, taskTitle: task.title, toLabel: columnLabel[nextId] });
-  }, [user?.role]);
+  }, [user?.role, activeSprint]);
 
   const handleCreateSprint = useCallback((name: string, start: string, end: string) => {
     (async () => {
@@ -1124,6 +1172,7 @@ export default function SprintPage() {
           const colId = (r.status as ColumnId) ?? "todo";
           const card: TaskCard = {
             id: String(r.externalId ?? r.id),
+            dbId: String(r.id),
             type: "Sprint Item",
             title: r.title,
             desc: r.description ?? undefined,

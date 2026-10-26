@@ -12,11 +12,9 @@ import { teamRoutes }  from "./modules/team/team.routes";
 
 const app = new Elysia()
   .use(cors({
-    // Restrict to the known frontend origin — never use wildcard when credentials: true
-    origin: process.env.FRONTEND_ORIGIN ?? "http://localhost:3000",
+    origin: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
-    // Required for the browser to send/receive httpOnly cookies cross-origin
     credentials: true,
   }))
   .use(swagger())

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Sidebar } from "@/components/sidebar";
 import { useRouter, usePathname } from "next/navigation";
 import {
   LayoutDashboard, FolderKanban, Zap, CheckSquare, Library,
@@ -278,7 +279,7 @@ function DeleteConfirm({ title, onConfirm, onCancel }: { title: string; onConfir
 }
 
 // ── Sidebar ────────────────────────────────────────────────────────────────────
-function Sidebar({ onLogout, onNav, onNewProject }: { onLogout: () => void; onNav: (h: string) => void; onNewProject: () => void }) {
+function LocalSidebar_Unused({ onLogout, onNav, onNewProject }: { onLogout: () => void; onNav: (h: string) => void; onNewProject: () => void }) {
   const pathname = usePathname();
   const { user } = useAuth();
   return (

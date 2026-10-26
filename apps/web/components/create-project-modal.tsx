@@ -77,7 +77,8 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
     setStatus(null);
 
     try {
-      const res = await fetch("http://localhost:3001/projects", {
+      const API = process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:3001";
+      const res = await fetch(`${API}/projects`, {
         method: "POST",
         credentials: "include",
         headers: {

@@ -5,7 +5,10 @@ import { projects } from "../../db/schema/project";
 import { users } from "../../db/schema/user";
 import { projectMembers } from "../../db/schema/project-member";
 import { members } from "../../db/schema/member";
-import { eq, like, and, SQL, asc } from "drizzle-orm";
+import { sprints } from "../../db/schema/sprint";
+import { sprintItems } from "../../db/schema/sprint-item";
+import { tasks } from "../../db/schema/task";
+import { eq, like, and, inArray, SQL, asc } from "drizzle-orm";
 
 // ─── JWT secret guard ─────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -529,8 +532,40 @@ export const projectRoutes = new Elysia({ prefix: "/projects" })
         return { success: false, message: "Project not found." };
       }
 
-      // ── Delete ────────────────────────────────────────────────────────────
-      await db.delete(projects).where(eq(projects.id, projectId));
+      // ── Cascade-delete related records ────────────────────────────────────
+      try {
+        // 1. Find all sprints belonging to this project
+        const projectSprints = await db
+          .select({ id: sprints.id })
+          .from(sprints)
+          .where(eq(sprints.projectId, projectId));
+
+        const sprintIds = projectSprints.map((s) => s.id);
+
+        // 2. Delete sprint_items that belong to those sprints
+        if (sprintIds.length > 0) {
+          await db.delete(sprintItems).where(inArray(sprintItems.sprintId, sprintIds));
+        }
+
+        // 3. Delete tasks belonging to this project
+        await db.delete(tasks).where(eq(tasks.projectId, projectId));
+
+        // 4. Delete sprints belonging to this project
+        await db.delete(sprints).where(eq(sprints.projectId, projectId));
+
+        // 5. Delete project members
+        await db.delete(projectMembers).where(eq(projectMembers.projectId, projectId));
+
+        // 6. Delete the project itself
+        await db.delete(projects).where(eq(projects.id, projectId));
+      } catch (err) {
+        console.error("Failed to delete project:", err);
+        set.status = 500;
+        return {
+          success: false,
+          message: "Failed to delete project. A database error occurred.",
+        };
+      }
 
       return {
         success: true,

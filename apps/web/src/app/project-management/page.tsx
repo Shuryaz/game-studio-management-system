@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Sidebar } from "@/components/sidebar";
 import { useRouter, usePathname } from "next/navigation";
 import {
   LayoutDashboard,
@@ -35,6 +36,7 @@ import {
 } from "@/components/ui/avatar";
 import { CreateProjectModal } from "@/components/create-project-modal";
 import { ProjectDetailModal } from "@/components/project-detail-modal";
+import { EditProjectModal } from "@/components/edit-project-modal";
 import { Topbar } from "@/components/topbar";
 import { useAuth } from "@/src/context/auth-context";
 import { can } from "@/src/lib/permissions";
@@ -101,7 +103,7 @@ const statusVariant: Record<ProjectStatus, string> = {
 };
 
 // ── Sidebar ────────────────────────────────────────────────────────────────────
-function Sidebar({
+function LocalSidebar_Unused({
   onLogout,
   onNav,
   onNewProject,
@@ -428,6 +430,7 @@ export default function ProjectManagementPage() {
   const [page, setPage] = useState(1);
   const [modalOpen, setModalOpen] = useState(false);
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
+  const [editProjectId, setEditProjectId] = useState<string | null>(null);
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [pagination, setPagination] = useState<Pagination>({
@@ -530,8 +533,14 @@ export default function ProjectManagementPage() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.message ?? "Failed to delete project.");
+        let errorMessage = "Failed to delete project.";
+        try {
+          const data = await res.json();
+          if (data.message) errorMessage = data.message;
+        } catch {
+          // Server returned non-JSON response (e.g. raw 500 error)
+        }
+        throw new Error(errorMessage);
       }
 
       setDeleteTarget(null);
@@ -704,7 +713,7 @@ export default function ProjectManagementPage() {
                   <div onClick={(e) => e.stopPropagation()}>
                     <ActionMenu
                       onDetails={() => setDetailProjectId(project.id)}
-                      onEdit={() => {/* TODO: open edit modal */}}
+                      onEdit={() => setEditProjectId(project.id)}
                       onDelete={() => setDeleteTarget({ id: project.id, name: project.name })}
                     />
                   </div>
@@ -768,6 +777,13 @@ export default function ProjectManagementPage() {
           setModalOpen(false);
           fetchProjects(); // refresh list after creating a new project
         }}
+      />
+
+      <EditProjectModal
+        projectId={editProjectId}
+        open={Boolean(editProjectId)}
+        onClose={() => setEditProjectId(null)}
+        onUpdated={fetchProjects}
       />
 
       <ProjectDetailModal
